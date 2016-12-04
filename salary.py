@@ -23,7 +23,7 @@ class Employee(object):
     def find_salary(self, data):
         m = re.search(b'Net \xe0 payer : ([\d\s\.,]+) euros', data)
         if m:
-            return Decimal(m.group(1).decode('utf-8').replace(' ', '').replace(',', ''))
+            return Decimal(m.group(1).decode('utf-8').replace(' ', '').replace(',', '.'))
 
     def find_iban(self, data):
         m = re.search(b'(FR\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w)', data)
