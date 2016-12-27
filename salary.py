@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from tempfile import mkstemp
+from time import sleep
 import argparse
 import getpass
 import os
@@ -85,8 +86,18 @@ class Application(object):
                       data={'amount':   employee.salary,
                             'label':    'Salaire %s %s' % (employee.name.split(' ')[0], employee.period)
                            }).json()
-        r = self.post('/users/me/transfers/%s' % r['id'],
-                      data={'validated': int(self.args.force)}).json()
+        transfer_id = r['id']
+        while True:
+            r = self.post('/users/me/transfers/%s' % transfer_id,
+                          data={'validated': int(self.args.force)}).json()
+            if 'code' in r:
+                if r['code'] == 'transferProcessing':
+                    print('%s' % colored('Warning: user is locked. Waiting five seconds and retry...', 'yellow'))
+                    sleep(5)
+                    continue
+                print('%s' % colored('Error: %s %s' % (r['code'], r.get('message', r.get('description', ''))), 'red'))
+                return
+            break
         print('%s State is %s' % (colored('Done!', 'green'), colored(r['state'], 'blue')))
 
     def main(self):
