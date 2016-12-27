@@ -20,25 +20,28 @@ class Employee(object):
         self.name = self.find_name(data)
         self.period = self.find_period(data)
 
+    def is_valid(self):
+        return all([self.name, self.salary])
+
     def find_salary(self, data):
-        m = re.search(b'Net \xe0 payer : ([\d\s\.,]+) euros', data)
+        m = re.search('Net \xe0? payer : ([\d\s\.,]+) euros', data)
         if m:
-            return Decimal(m.group(1).decode('utf-8').replace(' ', '').replace(',', '.'))
+            return Decimal(m.group(1).replace(' ', '').replace(',', '.'))
 
     def find_iban(self, data):
-        m = re.search(b'(FR\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w)', data)
+        m = re.search('(FR\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w\w \w\w\w)', data)
         if m:
-            return m.group(1).decode('utf-8').replace(' ', '')
+            return m.group(1).replace(' ', '')
 
     def find_name(self, data):
-        m = re.search(b'(\((Mademoiselle|Madame|Monsieur) ([^\)]+)\))', data)
+        m = re.search('((Mademoiselle|Madame|Monsieur) ([^\)\r\n]+))', data)
         if m:
-            return m.group(3).decode('utf-8')
+            return m.group(3)
 
     def find_period(self, data):
-        m = re.search(b'(\w+ 20\d\d)\)', data)
+        m = re.search('([\wé]+ 20\d\d)', data)
         if m:
-            return m.group(1).decode('utf-8')
+            return m.group(1)
 
 
 class Application(object):
@@ -72,7 +75,7 @@ class Application(object):
             subprocess.call(['mutool', 'clean', '-d', filename, outname])
 
             with open(outname, 'rb') as f:
-                return f.read()
+                return f.read().decode('utf-8', 'ignore')
         finally:
             os.remove(outname)
 
@@ -83,7 +86,7 @@ class Application(object):
                             'label':    'Salaire %s %s' % (employee.name.split(' ')[0], employee.period)
                            }).json()
         r = self.post('/users/me/transfers/%s' % r['id'],
-                      data={'validate': int(self.args.force)}).json()
+                      data={'validated': int(self.args.force)}).json()
         print('%s State is %s' % (colored('Done!', 'green'), colored(r['state'], 'blue')))
 
     def main(self):
@@ -117,8 +120,17 @@ class Application(object):
         for filename in self.args.files:
             data = self.read_pdf(filename)
             employee = Employee(data)
+            kind = ''
+            if not employee.is_valid():
+                data = self.post('/ocr', files={'file': ('lol.pdf', open(filename, 'rb'), 'application/pdf')}).json()['data']
+                employee = Employee(data)
+                kind = ' (OCRized)'
+            if not employee.is_valid():
+                print('\nError: Unable to parse file %s, skipping...' % colored(filename, 'yellow'), file=sys.stderr)
+                continue
 
             print('')
+            print('Filename: %s%s' % (colored(filename, 'yellow'), kind))
             print('Name: %s' % colored(employee.name, 'yellow'))
             print('IBAN: %s' % colored(employee.iban, 'yellow'))
             print('Amount: %s' % colored('%s €' % employee.salary, 'green'))
