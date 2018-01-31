@@ -40,7 +40,7 @@ class Employee(object):
             return m.group(3)
 
     def find_period(self, data):
-        m = re.search('([\wé]+ 20\d\d)', data)
+        m = re.search('([A-Za-zé]+ 20\d\d)', data)
         if m:
             return m.group(1)
 
@@ -80,6 +80,41 @@ class Application(object):
         finally:
             os.remove(outname)
 
+    def add_recipient(self, name, iban):
+        r = self.post('/users/me/accounts/%s/recipients' % self.account_id,
+                      data={'label': name,
+                            'iban': iban,
+                            'category': u'Salariés',
+                           }).json()
+        while True:
+            if 'code' in r:
+                if r['code'] == 'connectionLocked':
+                    print('%s' % colored('Warning: user is locked. Waiting five seconds and retry...', 'yellow'))
+                    sleep(5)
+                    r = self.post('/users/me/accounts/%s/recipients' % self.account_id,
+                                  data={'label': name,
+                                        'iban': iban,
+                                        'category': u'Salariés',
+                                       }).json()
+                    continue
+                print('%s' % colored('Error: %s %s' % (r['code'], r.get('message', r.get('description', ''))), 'red'))
+                return
+            recipient_id = r['id']
+            if 'fields' in r:
+                values = {}
+                for field in r['fields']:
+                    print('%s: ' % field['label'], end=' ', flush=True)
+                    r = sys.stdin.readline().strip()
+                    values[field['name']] = r
+                r = self.post('/users/me/recipients/%s?all' % recipient_id,
+                              data=values).json()
+                continue
+            break
+
+        print('Recipient %s added!' % name)
+        return r
+
+
     def do_transfer(self, employee, recipient):
         print('%s' % colored('YOLO...', 'green'))
         r = self.post('/users/me/accounts/%s/recipients/%s/transfers' % (self.account_id, recipient['id']),
@@ -91,7 +126,7 @@ class Application(object):
             r = self.post('/users/me/transfers/%s' % transfer_id,
                           data={'validated': int(self.args.force)}).json()
             if 'code' in r:
-                if r['code'] == 'transferProcessing':
+                if r['code'] == 'connectionLocked':
                     print('%s' % colored('Warning: user is locked. Waiting five seconds and retry...', 'yellow'))
                     sleep(5)
                     continue
@@ -153,15 +188,26 @@ class Application(object):
                     if r['iban'] == employee.iban:
                         break
                 else:
-                    for part in employee.name.split():
-                        if part.lower() in r['label'].lower():
-                            break
+                    if employee.name.split()[-1].lower() in r['label'].lower():
+                        break
                     else:
                         continue
-                    break
             else:
-                print('Recipient: %s' % colored('UNABLE TO FIND IT, SKIPPING', 'red'))
-                continue
+                print('Recipient: %s' % colored('UNABLE TO FIND IT', 'red'))
+                if employee.iban:
+                    print('Do you want to add him? (y/N)', end=' ', flush=True)
+                    if sys.stdin.readline().strip().lower() == 'y':
+                        try:
+                            r = self.add_recipient(employee.name, employee.iban)
+                        except KeyboardInterrupt:
+                            r = None
+                        if r is None:
+                            print('Aborting...')
+                            continue
+                    else:
+                        continue
+                else:
+                    continue
 
             print('Recipient: %s (%s)' % (colored(r['label'], 'yellow'), r['category']))
             print('Recipient Bank: %s' % colored(r['bank_name'], 'yellow'))
