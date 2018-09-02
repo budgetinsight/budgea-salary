@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 
+from prettytable import PrettyTable
 from termcolor import colored
 import requests
 
@@ -20,6 +21,7 @@ class Employee(object):
         self.iban = self.find_iban(data)
         self.name = self.find_name(data)
         self.period = self.find_period(data)
+        self.recipient = None
 
     def is_valid(self):
         return all([self.name, self.salary])
@@ -81,6 +83,7 @@ class Application(object):
             os.remove(outname)
 
     def add_recipient(self, name, iban):
+        print('Adding recipient...', end=' ', flush=True)
         r = self.post('/users/me/accounts/%s/recipients' % self.account_id,
                       data={'label': name,
                             'iban': iban,
@@ -97,7 +100,7 @@ class Application(object):
                                         'category': u'Salariés',
                                        }).json()
                     continue
-                print('%s' % colored('Error: %s %s' % (r['code'], r.get('message', r.get('description', ''))), 'red'))
+                print('%s' % colored('%s %s' % (r['code'], r.get('message', r.get('description', ''))), 'red'))
                 return
             recipient_id = r['id']
             if 'fields' in r:
@@ -106,18 +109,20 @@ class Application(object):
                     print('%s: ' % field['label'], end=' ', flush=True)
                     r = sys.stdin.readline().strip()
                     values[field['name']] = r
+                print('Adding recipient...', end=' ', flush=True)
                 r = self.post('/users/me/recipients/%s?all' % recipient_id,
                               data=values).json()
                 continue
             break
 
-        print('Recipient %s added!' % name)
         return r
 
 
-    def do_transfer(self, employee, recipient):
-        print('%s' % colored('YOLO...', 'green'))
-        r = self.post('/users/me/accounts/%s/recipients/%s/transfers' % (self.account_id, recipient['id']),
+    def do_transfer(self, employee):
+        print('Transfering %s to %s...' % (colored('%s €' % employee.salary, 'green'),
+                                           colored(employee.name, 'yellow')),
+              end=' ', flush=True)
+        r = self.post('/users/me/accounts/%s/recipients/%s/transfers' % (self.account_id, employee.recipient['id']),
                       data={'amount':   employee.salary,
                             'label':    'Salaire %s %s' % (employee.name.split(' ')[0], employee.period)
                            }).json()
@@ -133,7 +138,7 @@ class Application(object):
                 print('%s' % colored('Error: %s %s' % (r['code'], r.get('message', r.get('description', ''))), 'red'))
                 return
             break
-        print('%s State is %s' % (colored('Done!', 'green'), colored(r['state'], 'blue')))
+        print('%s (%s)' % (colored('done!', 'green'), colored(r['state'], 'blue')))
 
     def main(self):
         self.args = self.parser.parse_args()
@@ -163,24 +168,28 @@ class Application(object):
 
         recipients = self.get('/users/me/accounts/%s/recipients' % self.account_id).json()['recipients']
 
+        transfers = []
+
         for filename in self.args.files:
+            print('Extracting %s... ' % colored(filename, 'yellow'), end=' ', flush=True)
             data = self.read_pdf(filename)
             employee = Employee(data)
             kind = ''
             if not employee.is_valid():
-                data = self.post('/ocr', files={'file': ('lol.pdf', open(filename, 'rb'), 'application/pdf')}).json()['data']
+                data = None
+                while data is None:
+                    try:
+                        r = self.post('/ocr', files={'file': ('lol.pdf', open(filename, 'rb'), 'application/pdf')}).json()
+                        data = r['data']
+                    except Exception as e:
+                        print(colored('error: %s %s' % (e, r), 'red'))
+
                 employee = Employee(data)
                 kind = ' (OCRized)'
             if not employee.is_valid():
-                print('\nError: Unable to parse file %s, skipping...' % colored(filename, 'yellow'), file=sys.stderr)
+                print('unable to parse file %s, skipping...' % colored(filename, 'yellow'), file=sys.stderr)
                 continue
 
-            print('')
-            print('Filename: %s%s' % (colored(filename, 'yellow'), kind))
-            print('Name: %s' % colored(employee.name, 'yellow'))
-            print('IBAN: %s' % colored(employee.iban, 'yellow'))
-            print('Amount: %s' % colored('%s €' % employee.salary, 'green'))
-            print('Period: %s' % colored(employee.period, 'yellow'))
             for r in recipients:
                 if r['category'] not in ('Salariés', 'Stagiaires'):
                     continue
@@ -193,7 +202,7 @@ class Application(object):
                     else:
                         continue
             else:
-                print('Recipient: %s' % colored('UNABLE TO FIND IT', 'red'))
+                print(colored('unable to find recipient', 'red'))
                 if employee.iban:
                     print('Do you want to add him? (y/N)', end=' ', flush=True)
                     if sys.stdin.readline().strip().lower() == 'y':
@@ -202,21 +211,33 @@ class Application(object):
                         except KeyboardInterrupt:
                             r = None
                         if r is None:
-                            print('Aborting...')
+                            print('abort...')
                             continue
                     else:
                         continue
                 else:
                     continue
 
-            print('Recipient: %s (%s)' % (colored(r['label'], 'yellow'), r['category']))
-            print('Recipient Bank: %s' % colored(r['bank_name'], 'yellow'))
-            print('Recipient IBAN: %s' % colored(r['iban'], 'yellow'))
-            print('Do you want to do transfer? (y/N)', end=' ', flush=True)
-            if sys.stdin.readline().strip().lower() == 'y':
-                self.do_transfer(employee, r)
-            else:
-                print(colored('Okay, skipping...', 'yellow'))
+            employee.recipient = r
+            transfers.append(employee)
+            print(colored('ok', 'green'))
+
+        table = PrettyTable(('Recipient', 'IBAN', 'Amount'))
+        table.align['Recipient'] = 'l'
+        table.align['IBAN'] = 'l'
+        table.align['Amount'] = 'r'
+        for employee in transfers:
+            table.add_row((colored(employee.name, 'yellow'), colored(employee.iban, 'yellow'), colored('%s €' % employee.salary, 'green')))
+
+        print(table.get_string())
+
+        print('Do you want to execute transfers? (y/N)', end=' ', flush=True)
+        if sys.stdin.readline().strip().lower() != 'y':
+            print(colored('Okay, abort...', 'yellow'))
+            return
+
+        for employee in transfers:
+            self.do_transfer(employee)
 
 
 if __name__ == '__main__':
